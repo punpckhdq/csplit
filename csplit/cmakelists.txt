@@ -1,0 +1,8 @@
+add_executable(csplit
+	main.c
+	csplit.h
+	cJSON.c
+	cJSON.h)
+
+target_compile_definitions(csplit PRIVATE
+	CJSON_HIDE_SYMBOLS)

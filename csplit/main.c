@@ -670,8 +670,9 @@ void project_parse_objects(
     const cJSON* json) {
     uint32_t module_count = 0;
 
+    const cJSON* libraries_json = cJSON_GetObjectItemCaseSensitive(json, "libraries");
     const cJSON* library_json = NULL;
-    cJSON_ArrayForEach(library_json, json) {
+    cJSON_ArrayForEach(library_json, libraries_json) {
         cJSON* objects_json = cJSON_GetObjectItemCaseSensitive(library_json, "objects");
         module_count += (uint32_t)cJSON_GetArraySize(objects_json);
     }
@@ -685,7 +686,7 @@ void project_parse_objects(
 
     library_json = NULL;
     uint32_t module_index = 0;
-    cJSON_ArrayForEach(library_json, json) {
+    cJSON_ArrayForEach(library_json, libraries_json) {
         cJSON* objects_json = cJSON_GetObjectItemCaseSensitive(library_json, "objects");
 
         const cJSON* object_json = NULL;
@@ -696,8 +697,10 @@ void project_parse_objects(
             cJSON* json_index = cJSON_GetObjectItemCaseSensitive(object_json, "index");
             CHECK(cJSON_IsNumber(json_index), EXIT_FAILURE, "module #%" PRIu32 ": invalid index", module_index);
 
-            const char* object_file_name = object_json->string;
-            CHECK(object_file_name != NULL, EXIT_INVALID_JSON, "no name for object");
+            cJSON* json_name = cJSON_GetObjectItemCaseSensitive(object_json, "name");
+            CHECK(cJSON_IsString(json_name), EXIT_FAILURE, "module #%" PRIu32 ": invalid name", module_index);
+
+            const char* object_file_name = json_name->valuestring;
             const char* object_file_ext = strrchr(object_file_name, '.');
 
             ptrdiff_t object_name_length = (object_file_ext != NULL) ?

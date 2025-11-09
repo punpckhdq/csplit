@@ -700,14 +700,23 @@ void project_parse_objects(
             cJSON* json_name = cJSON_GetObjectItemCaseSensitive(object_json, "name");
             CHECK(cJSON_IsString(json_name), EXIT_FAILURE, "module #%" PRIu32 ": invalid name", module_index);
 
-            const char* object_file_name = json_name->valuestring;
+            char* object_file_name = json_name->valuestring;
+
             const char* object_file_ext = strrchr(object_file_name, '.');
 
-            ptrdiff_t object_name_length = (object_file_ext != NULL) ?
-                object_file_ext - object_file_name : (ptrdiff_t)strlen(object_file_name);
+            size_t object_name_length = (object_file_ext != NULL) ?
+                object_file_ext - object_file_name : strlen(object_file_name);
             
             module->index = (uint32_t)json_index->valueint;
             snprintf(module->name, COUNTOF(module->name), "%.*s.obj", (uint32_t)object_name_length, object_file_name);
+
+#ifdef WIN32
+            for (char* p = module->name; *p; p++) {
+                if (*p == '/') {
+                    *p = '\\';
+                }
+            }
+#endif
         }
     }
 }

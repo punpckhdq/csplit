@@ -257,9 +257,30 @@ void coff_set_symbol_name(
     }
 }
 
+void file_mkdir_parents(
+    const char* file_path) {
+    char folder_path[_MAX_PATH] = { 0 };
+    strncpy(folder_path, file_path, COUNTOF(folder_path) - 1);
+    folder_path[_MAX_PATH - 1] = '\0';
+
+    for (char* p = folder_path; *p; p++) {
+        if (*p == '\\' || *p == '/') {
+            *p = '\0';
+
+            int result = _mkdir(folder_path);
+            if (result != 0) {
+                CHECK(errno == EEXIST, EXIT_FILE_IO, "couldn't mkdir %s", folder_path);
+            }
+
+            *p = '\\';
+        }
+    }
+}
+
 void coff_write(
     struct COFFState* state,
     const char* file_path) {
+    file_mkdir_parents(file_path);
     FILE* fp = fopen(file_path, "wb");
     CHECK(fp != NULL, EXIT_FILE_IO, "couldn't open %s", file_path);
 
@@ -644,40 +665,54 @@ void project_parse_splits(
     }
 }
 
-void project_parse_modules(
+void project_parse_objects(
     struct projectState* state,
     const cJSON* json) {
-    int32_t module_count = (uint32_t)cJSON_GetArraySize(json);
-    CHECK(module_count > 0, EXIT_INVALID_JSON, "no modules or invalid object type");
+    uint32_t module_count = 0;
 
+    const cJSON* library_json = NULL;
+    cJSON_ArrayForEach(library_json, json) {
+        cJSON* objects_json = cJSON_GetObjectItemCaseSensitive(library_json, "objects");
+        module_count += (uint32_t)cJSON_GetArraySize(objects_json);
+    }
+
+    CHECK(module_count > 0, EXIT_INVALID_JSON, "project has no modules");
     struct module* modules = malloc(sizeof(modules[0]) * module_count);
     CHECK(modules != NULL, EXIT_MALLOC_FAILED, "out of memory");
 
-    state->modules = modules;
     state->module_count = module_count;
+    state->modules = modules;
 
+    library_json = NULL;
     uint32_t module_index = 0;
-    const cJSON* module_json = NULL;
-    cJSON_ArrayForEach(module_json, json) {
-        CHECK(module_index < module_count, EXIT_INVALID_JSON, "modules exceeded allocated count");
-        struct module* module = &modules[module_index++];
+    cJSON_ArrayForEach(library_json, json) {
+        cJSON* objects_json = cJSON_GetObjectItemCaseSensitive(library_json, "objects");
 
-        cJSON* json_index = cJSON_GetObjectItemCaseSensitive(module_json, "index");
-        CHECK(cJSON_IsNumber(json_index), EXIT_FAILURE, "module #%" PRIu32 ": invalid index", module_index);
+        const cJSON* object_json = NULL;
+        cJSON_ArrayForEach(object_json, objects_json) {
+            CHECK(module_index < module_count, EXIT_INVALID_JSON, "modules exceeded allocated count");
+            struct module* module = &modules[module_index++];
 
-        cJSON* json_name = cJSON_GetObjectItemCaseSensitive(module_json, "name");
-        CHECK(cJSON_IsString(json_name), EXIT_FAILURE, "module #%" PRIu32 ": invalid name", module_index);
+            cJSON* json_index = cJSON_GetObjectItemCaseSensitive(object_json, "index");
+            CHECK(cJSON_IsNumber(json_index), EXIT_FAILURE, "module #%" PRIu32 ": invalid index", module_index);
 
-        module->index = (uint32_t)json_index->valueint;
-        strncpy(module->name, json_name->valuestring, COUNTOF(module->name) - 1);
-        module->name[COUNTOF(module->name) - 1] = '\0';
+            const char* object_file_name = object_json->string;
+            CHECK(object_file_name != NULL, EXIT_INVALID_JSON, "no name for object");
+            const char* object_file_ext = strrchr(object_file_name, '.');
+
+            ptrdiff_t object_name_length = (object_file_ext != NULL) ?
+                object_file_ext - object_file_name : (ptrdiff_t)strlen(object_file_name);
+            
+            module->index = (uint32_t)json_index->valueint;
+            snprintf(module->name, COUNTOF(module->name), "%.*s.obj", (uint32_t)object_name_length, object_file_name);
+        }
     }
 }
 
 void project_parse_symbols(
     struct projectState* state,
     const cJSON* json) {
-    int32_t symbol_count = (uint32_t)cJSON_GetArraySize(json);
+    uint32_t symbol_count = (uint32_t)cJSON_GetArraySize(json);
     CHECK(symbol_count > 0, EXIT_INVALID_JSON, "no symbols or invalid object type");
 
     struct symbol* symbols = malloc(sizeof(symbols[0]) * symbol_count);
@@ -796,7 +831,7 @@ struct projectState* project_new_from_dir(
         void (*parse_function)(struct projectState*, const cJSON*);
     } project_json_documents[] = {
         { "splits", project_parse_splits },
-        { "modules", project_parse_modules },
+        { "objects", project_parse_objects },
         { "symbols", project_parse_symbols },
         { "contribs", project_parse_contribs },
         { "relocs", project_parse_relocs },

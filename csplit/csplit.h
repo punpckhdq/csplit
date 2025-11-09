@@ -1,6 +1,7 @@
 #pragma once
 
 #include <assert.h>
+#include <direct.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdarg.h>

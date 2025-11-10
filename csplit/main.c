@@ -749,7 +749,7 @@ void project_parse_symbols(
         CHECK(cJSON_IsString(json_name), EXIT_FAILURE, "symbol #%" PRIu32 ": invalid name", symbol_index);
 
         symbol->file_offset = (uint32_t)json_file_offset->valueint;
-        symbol->flags = (uint32_t)json_flags->valueint;
+        symbol->flags = (uint32_t)json_flags->valuedouble;
         strncpy(symbol->name, json_name->valuestring, COUNTOF(symbol->name) - 1);
         symbol->name[COUNTOF(symbol->name) - 1] = '\0';
     }
@@ -790,7 +790,7 @@ void project_parse_contribs(
 
         contrib->file_offset = (uint32_t)json_file_offset->valueint;
         contrib->size = (uint32_t)json_size->valueint;
-        contrib->flags = (uint32_t)json_flags->valueint;
+        contrib->flags = (uint32_t)json_flags->valuedouble;
         contrib->module_index = (uint32_t)json_module_index->valueint;
         contrib->selection = (uint32_t)json_selection->valueint;
     }

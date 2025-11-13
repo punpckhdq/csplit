@@ -597,6 +597,31 @@ void do_module(
         }
     }
 
+    // if the file is empty (e.g. no sections) create a phony section to keep objdiff happy
+
+    if (coff->section_count == 0) {
+        uint32_t section_index = coff_add_section(coff);
+        struct COFFSectionState* section = &coff->sections[section_index];
+
+        section->data = NULL;
+
+        memcpy(section->header.name, "PHONY\0\0", 8);
+
+        section->header.virtual_size = 0;
+        section->header.virtual_address = 0;
+        section->header.size_of_raw_data = 0;
+        section->header.pointer_to_raw_data = 0;
+        section->header.pointer_to_relocations = 0;
+        section->header.pointer_to_line_numbers = 0;
+        section->header.number_of_relocations = 0;
+        section->header.number_of_line_numbers = 0;
+        section->header.characteristics = 0;
+
+        // create section symbols
+
+        do_section_symbols(coff, section, section_index, "PHONY", 0);
+    }
+
     char output_file_path[_MAX_PATH] = { 0 };
     snprintf(output_file_path, COUNTOF(output_file_path), "%s/%s",
         state->output_dir_path,

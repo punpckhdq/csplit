@@ -690,15 +690,15 @@ void project_parse_splits(
     }
 }
 
-void project_parse_objects(
+void project_parse_config(
     struct projectState* state,
     const cJSON* json) {
     uint32_t module_count = 0;
 
-    const cJSON* libraries_json = cJSON_GetObjectItemCaseSensitive(json, "libraries");
-    const cJSON* library_json = NULL;
-    cJSON_ArrayForEach(library_json, libraries_json) {
-        cJSON* objects_json = cJSON_GetObjectItemCaseSensitive(library_json, "objects");
+    const cJSON* projects_json = cJSON_GetObjectItemCaseSensitive(json, "projects");
+    const cJSON* project_json = NULL;
+    cJSON_ArrayForEach(project_json, projects_json) {
+        cJSON* objects_json = cJSON_GetObjectItemCaseSensitive(project_json, "objects");
         module_count += (uint32_t)cJSON_GetArraySize(objects_json);
     }
 
@@ -709,10 +709,10 @@ void project_parse_objects(
     state->module_count = module_count;
     state->modules = modules;
 
-    library_json = NULL;
+    project_json = NULL;
     uint32_t module_index = 0;
-    cJSON_ArrayForEach(library_json, libraries_json) {
-        cJSON* objects_json = cJSON_GetObjectItemCaseSensitive(library_json, "objects");
+    cJSON_ArrayForEach(project_json, projects_json) {
+        cJSON* objects_json = cJSON_GetObjectItemCaseSensitive(project_json, "objects");
 
         const cJSON* object_json = NULL;
         cJSON_ArrayForEach(object_json, objects_json) {
@@ -876,7 +876,7 @@ struct projectState* project_new_from_dir(
         void (*parse_function)(struct projectState*, const cJSON*);
     } project_json_documents[] = {
         { "splits", project_parse_splits },
-        { "objects", project_parse_objects },
+        { "config", project_parse_config },
         { "symbols", project_parse_symbols },
         { "contribs", project_parse_contribs },
         { "relocs", project_parse_relocs },

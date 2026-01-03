@@ -166,7 +166,11 @@ void die(
     exit(code);
 }
 
+#ifdef WIN32
+#define CHECK(_x, _code, _format, ...) do { if (!(_x)) { die(_code, _format "\n", __VA_ARGS__); } } while(false)
+#else
 #define CHECK(_x, _code, _format, ...) do { if (!(_x)) { die(_code, __FILE__ ":" STRINGIFY(__LINE__) ": " _format "\n", #__VA_ARGS__); } } while(false)
+#endif
 
 struct COFFState* coff_new(
     void) {

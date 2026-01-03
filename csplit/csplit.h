@@ -1,7 +1,6 @@
 #pragma once
 
 #include <assert.h>
-#include <direct.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -10,10 +9,32 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define PACKED __pragma(pack(1))
+#ifdef WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#include <errno.h>
+#include <linux/limits.h>
+#endif
+
+#ifdef WIN32
+#define PACKED_STRUCT(_name) __pragma(pack(1)) struct _name
+#define PACKED_UNION(_name) __pragma(pack(1)) union _name
 #define NORETURN __declspec(noreturn)
+#define mkdir(_path, _mode) _mkdir(_path)
+#else
+#define PACKED_STRUCT(_name) struct __attribute__((packed, aligned(1)))  _name
+#define PACKED_UNION(_name) union __attribute__((packed, aligned(1))) _name
+#define NORETURN __attribute__((noreturn))
+#define _MAX_PATH PATH_MAX
+#define __min(x, y) (((x) < (y)) ? (x) : (y))
+#define __max(x, y) (((x) > (y)) ? (x) : (y))
+#endif
 
 #define COUNTOF(_x) (sizeof(_x)/sizeof(_x[0]))
+
+#define STRINGIFY(x) STRINGIFY2(x)
+#define STRINGIFY2(x) #x
 
 struct contrib {
     uint32_t file_offset;

@@ -12,8 +12,7 @@ enum exitCode {
 
 // packed file data (sorry big-endian users)
 
-PACKED
-struct COFFFileHeader {
+PACKED_STRUCT(COFFFileHeader) {
     uint16_t machine;
     uint16_t number_of_sections;
     uint32_t time_date_stamp;
@@ -23,8 +22,7 @@ struct COFFFileHeader {
     uint16_t characteristics;
 };
 
-PACKED
-struct COFFSectionHeader {
+PACKED_STRUCT(COFFSectionHeader) {
     char name[8];
     uint32_t virtual_size;
     uint32_t virtual_address;
@@ -37,25 +35,22 @@ struct COFFSectionHeader {
     uint32_t characteristics;
 };
 
-PACKED
-struct COFFRelocation {
+PACKED_STRUCT(COFFRelocation) {
     uint32_t virtual_address;
     uint32_t symbol_table_index;
     uint16_t type;
 };
 
-PACKED
-union COFFSymbolName {
+PACKED_UNION(COFFSymbolName) {
     char name[8];
-    struct {
+    PACKED_STRUCT(_extension) {
         uint32_t zeroes;
         uint32_t offset;
     } extension;
 };
 
-PACKED
-union COFFSymbol {
-    struct {
+PACKED_UNION(COFFSymbol) {
+    PACKED_STRUCT(_symbol) {
         union COFFSymbolName name;
         uint32_t value;
         uint16_t section_number;
@@ -63,29 +58,29 @@ union COFFSymbol {
         uint8_t  storage_class;
         uint8_t  number_of_aux_symbols;
     } symbol;
-    struct {
+    PACKED_STRUCT(_function_definition) {
         uint32_t tag_index;
         uint32_t total_size;
         uint32_t pointer_to_line_number;
         uint32_t pointer_to_next_function;
         uint16_t unused1;
     } function_definition;
-    struct {
+    PACKED_STRUCT(_bf_ef_symbol) {
         uint32_t unused2;
         uint16_t line_number;
         uint8_t	 unused3[6];
         uint32_t pointer_to_next_function;
         uint16_t unused4;
     } bf_ef_symbol;
-    struct {
+    PACKED_STRUCT(_weak_external) {
         uint32_t tag_index;
         uint32_t characteristics;
         uint8_t  unused5[10];
     } weak_external;
-    struct {
+    PACKED_STRUCT(_file) {
         char file_name[18];
     } file;
-    struct {
+    PACKED_STRUCT(_section_definition) {
         uint32_t length;
         uint16_t number_of_relocations;
         uint16_t number_of_line_numbers;
@@ -161,7 +156,7 @@ void die(
     const char *format,
     ...) {
     char buffer[4096] = { 0 };
-    va_list args = NULL;
+    va_list args;
     va_start(args, format);
     vsnprintf(buffer, COUNTOF(buffer), format, args);
     va_end(args);
@@ -171,7 +166,7 @@ void die(
     exit(code);
 }
 
-#define CHECK(_x, _code, _format, ...) do { if (!(_x)) { die(_code, _format, __VA_ARGS__); } } while(false)
+#define CHECK(_x, _code, _format, ...) do { if (!(_x)) { die(_code, __FILE__ ":" STRINGIFY(__LINE__) ": " _format "\n", #__VA_ARGS__); } } while(false)
 
 struct COFFState* coff_new(
     void) {
@@ -266,13 +261,17 @@ void file_mkdir_parents(
     for (char* p = folder_path; *p; p++) {
         if (*p == '\\' || *p == '/') {
             *p = '\0';
-
-            int result = _mkdir(folder_path);
+			
+            int result = mkdir(folder_path, 0700);
             if (result != 0) {
                 CHECK(errno == EEXIST, EXIT_FILE_IO, "couldn't mkdir %s", folder_path);
             }
 
+#ifdef WIN32
             *p = '\\';
+#else
+			*p = '/';
+#endif
         }
     }
 }

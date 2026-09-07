@@ -606,7 +606,9 @@ void do_module(
         uint32_t section_index = coff_add_section(coff);
         struct COFFSectionState* section = &coff->sections[section_index];
 
+        section->contrib_index = 0;
         section->data = NULL;
+        section->reloc_count = 0;
 
         memcpy(section->header.name, "PHONY\0\0", 8);
 

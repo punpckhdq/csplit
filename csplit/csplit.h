@@ -64,6 +64,6 @@ struct split {
 struct symbol {
     uint32_t file_offset;
     uint32_t flags;
-    bool local;
+    uint8_t storage_class;
     char name[1024];
 };

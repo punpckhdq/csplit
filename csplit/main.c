@@ -538,8 +538,8 @@ void do_module(
                 coff_set_symbol_name(coff, &coff_symbol->symbol.name, symbol->name);
                 coff_symbol->symbol.value = symbol_offset;
                 coff_symbol->symbol.section_number = section_index + 1;
-                coff_symbol->symbol.type = contrib->flags & 0x20;
-                coff_symbol->symbol.storage_class = symbol->local ? 3 : 2;
+                coff_symbol->symbol.type = symbol->flags & 0x20;
+                coff_symbol->symbol.storage_class = symbol->storage_class;
                 coff_symbol->symbol.number_of_aux_symbols = 0;
                 
                 // create breadcrumb
@@ -787,7 +787,13 @@ void project_parse_symbols(
 
         symbol->file_offset = (uint32_t)json_file_offset->valueint;
         symbol->flags = (uint32_t)json_flags->valuedouble;
-        symbol->local = local;
+        symbol->storage_class = local ? 3 : 2;
+        cJSON* json_storage_class = cJSON_GetObjectItemCaseSensitive(symbol_json, "storage_class");
+        if (cJSON_IsNumber(json_storage_class)) {
+            CHECK(json_storage_class->valueint == 2 || json_storage_class->valueint == 3 ||
+                  json_storage_class->valueint == 6, EXIT_INVALID_JSON, "invalid storage_class");
+            symbol->storage_class = (uint8_t)json_storage_class->valueint;
+        }
         strncpy(symbol->name, json_name->valuestring, COUNTOF(symbol->name) - 1);
         symbol->name[COUNTOF(symbol->name) - 1] = '\0';
     }

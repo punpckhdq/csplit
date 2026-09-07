@@ -790,8 +790,6 @@ void project_parse_symbols(
         symbol->storage_class = local ? 3 : 2;
         cJSON* json_storage_class = cJSON_GetObjectItemCaseSensitive(symbol_json, "storage_class");
         if (cJSON_IsNumber(json_storage_class)) {
-            CHECK(json_storage_class->valueint == 2 || json_storage_class->valueint == 3 ||
-                  json_storage_class->valueint == 6, EXIT_INVALID_JSON, "invalid storage_class");
             symbol->storage_class = (uint8_t)json_storage_class->valueint;
         }
         strncpy(symbol->name, json_name->valuestring, COUNTOF(symbol->name) - 1);

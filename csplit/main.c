@@ -210,6 +210,7 @@ uint32_t coff_add_section(
         state->sections = realloc(state->sections, state->section_capacity * sizeof(state->sections[0]));
         CHECK(state->sections != NULL, EXIT_MALLOC_FAILED, "out of memory");
     }
+    memset(&state->sections[state->section_count], 0, sizeof(state->sections[0]));
     return state->section_count++;
 }
 
@@ -266,9 +267,12 @@ void file_mkdir_parents(
         if (*p == '\\' || *p == '/') {
             *p = '\0';
 			
-            int result = mkdir(folder_path, 0700);
-            if (result != 0) {
-                CHECK(errno == EEXIST, EXIT_FILE_IO, "couldn't mkdir %s", folder_path);
+            size_t length = strlen(folder_path);
+            if (length > 0 && folder_path[length - 1] != ':') {
+                int result = mkdir(folder_path, 0700);
+                if (result != 0) {
+                    CHECK(errno == EEXIST, EXIT_FILE_IO, "couldn't mkdir %s", folder_path);
+                }
             }
 
 #ifdef WIN32
@@ -509,7 +513,8 @@ void do_module(
             memcpy(section->header.name, section_name, section_name_length);
         } else {
             uint32_t string_table_offset = coff_add_string(coff, section_name, section_name_length);
-            snprintf(section->header.name, COUNTOF(section->header.name), "/%" PRIu16, string_table_offset);
+            memset(section->header.name, 0, sizeof(section->header.name));
+            snprintf(section->header.name, COUNTOF(section->header.name), "/%" PRIu32, string_table_offset);
         }
 
         section->header.virtual_size = 0;

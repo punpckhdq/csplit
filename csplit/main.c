@@ -8,6 +8,7 @@ enum exitCode {
     EXIT_MALLOC_FAILED,
     EXIT_OOB,
     EXIT_INVALID_JSON,
+    EXIT_INVALID_IMAGE,
 };
 
 // packed file data (sorry big-endian users)
@@ -143,9 +144,23 @@ struct projectState {
     uint32_t symbol_count;
 };
 
+struct imageSection {
+    uint32_t address;
+    uint32_t virtual_size;
+    uint32_t raw_offset;
+    uint32_t raw_size;
+};
+
+struct imageState {
+    const uint8_t* file_data;
+    uint32_t file_size;
+    struct imageSection sections[256];
+    uint32_t section_count;
+};
+
 struct mainState {
     const struct projectState* project;
-    const uint8_t* input_file_data;
+    const struct imageState* image;
     const char* output_dir_path;
     bool verbose;
 };
@@ -167,9 +182,9 @@ void die(
 }
 
 #ifdef WIN32
-#define CHECK(_x, _code, _format, ...) do { if (!(_x)) { die(_code, _format "\n", __VA_ARGS__); } } while(false)
+#define CHECK(_x, _code, _format, ...) do { if (!(_x)) { die(_code, _format "\n", ##__VA_ARGS__); } } while(false)
 #else
-#define CHECK(_x, _code, _format, ...) do { if (!(_x)) { die(_code, __FILE__ ":" STRINGIFY(__LINE__) ": " _format "\n", #__VA_ARGS__); } } while(false)
+#define CHECK(_x, _code, _format, ...) do { if (!(_x)) { die(_code, __FILE__ ":" STRINGIFY(__LINE__) ": " _format "\n", ##__VA_ARGS__); } } while(false)
 #endif
 
 struct COFFState* coff_new(
@@ -406,6 +421,144 @@ void do_section_symbols(
         sizeof(section_aux_symbol->section_definition.unused6));
 }
 
+uint32_t image_read_u32(
+    const struct imageState* image,
+    uint32_t file_offset) {
+    CHECK(file_offset <= image->file_size && image->file_size - file_offset >= 4, EXIT_INVALID_IMAGE,
+        "image header field at 0x%" PRIx32 " is outside the file", file_offset);
+    uint32_t value;
+    memcpy(&value, &image->file_data[file_offset], sizeof(value));
+    return value;
+}
+
+uint16_t image_read_u16(
+    const struct imageState* image,
+    uint32_t file_offset) {
+    CHECK(file_offset <= image->file_size && image->file_size - file_offset >= 2, EXIT_INVALID_IMAGE,
+        "image header field at 0x%" PRIx32 " is outside the file", file_offset);
+    uint16_t value;
+    memcpy(&value, &image->file_data[file_offset], sizeof(value));
+    return value;
+}
+
+void image_add_section(
+    struct imageState* image,
+    uint32_t address,
+    uint32_t virtual_size,
+    uint32_t raw_offset,
+    uint32_t raw_size) {
+    CHECK(image->section_count < COUNTOF(image->sections), EXIT_OOB, "out of image sections");
+    CHECK(raw_offset <= image->file_size && raw_size <= image->file_size - raw_offset, EXIT_INVALID_IMAGE,
+        "image section at 0x%08" PRIx32 " has raw data outside the file", address);
+
+    struct imageSection* section = &image->sections[image->section_count++];
+    section->address = address;
+    section->virtual_size = __max(virtual_size, raw_size);
+    section->raw_offset = raw_offset;
+    section->raw_size = raw_size;
+}
+
+void image_load_pe(
+    struct imageState* image) {
+    uint32_t pe_offset = image_read_u32(image, 0x3c);
+    CHECK(image_read_u32(image, pe_offset) == 0x00004550, EXIT_INVALID_IMAGE, "bad PE signature");
+
+    uint32_t file_header_offset = pe_offset + 4;
+    uint16_t section_count = image_read_u16(image, file_header_offset + 2);
+    uint16_t optional_header_size = image_read_u16(image, file_header_offset + 16);
+
+    uint32_t optional_header_offset = file_header_offset + sizeof(struct COFFFileHeader);
+    CHECK(image_read_u16(image, optional_header_offset) == 0x10b, EXIT_INVALID_IMAGE, "not a PE32 image");
+    uint32_t image_base = image_read_u32(image, optional_header_offset + 28);
+    uint32_t headers_size = image_read_u32(image, optional_header_offset + 60);
+
+    image_add_section(image, image_base, headers_size, 0, __min(headers_size, image->file_size));
+
+    uint32_t section_header_offset = optional_header_offset + optional_header_size;
+    for (uint32_t i = 0; i < section_count; i++) {
+        struct COFFSectionHeader header;
+        uint32_t offset = section_header_offset + i * (uint32_t)sizeof(header);
+        CHECK(offset <= image->file_size && image->file_size - offset >= sizeof(header), EXIT_INVALID_IMAGE,
+            "PE section header %" PRIu32 " is outside the file", i);
+        memcpy(&header, &image->file_data[offset], sizeof(header));
+
+        image_add_section(image,
+            image_base + header.virtual_address,
+            header.virtual_size,
+            header.pointer_to_raw_data,
+            header.size_of_raw_data);
+    }
+}
+
+void image_load_xbe(
+    struct imageState* image) {
+    uint32_t base_address = image_read_u32(image, 0x104);
+    uint32_t headers_size = image_read_u32(image, 0x108);
+    uint32_t section_count = image_read_u32(image, 0x11c);
+    uint32_t section_headers_address = image_read_u32(image, 0x120);
+
+    CHECK(section_headers_address >= base_address && section_headers_address - base_address < headers_size,
+        EXIT_INVALID_IMAGE, "XBE section headers are outside the image header");
+
+    image_add_section(image, base_address, headers_size, 0, __min(headers_size, image->file_size));
+
+    uint32_t section_header_offset = section_headers_address - base_address;
+    for (uint32_t i = 0; i < section_count; i++) {
+        uint32_t offset = section_header_offset + i * 0x38;
+        image_add_section(image,
+            image_read_u32(image, offset + 0x04),
+            image_read_u32(image, offset + 0x08),
+            image_read_u32(image, offset + 0x0c),
+            image_read_u32(image, offset + 0x10));
+    }
+}
+
+void image_load(
+    struct imageState* image,
+    const uint8_t* file_data,
+    uint32_t file_size) {
+    image->file_data = file_data;
+    image->file_size = file_size;
+    image->section_count = 0;
+
+    if (file_size >= 4 && !memcmp(file_data, "XBEH", 4)) {
+        image_load_xbe(image);
+    } else if (file_size >= 2 && !memcmp(file_data, "MZ", 2)) {
+        image_load_pe(image);
+    } else {
+        die(EXIT_INVALID_IMAGE, "input file is neither a PE nor an XBE\n");
+    }
+}
+
+void image_read(
+    const struct imageState* image,
+    uint32_t address,
+    uint32_t size,
+    uint8_t* out) {
+    while (size > 0) {
+        const struct imageSection* found = NULL;
+        for (uint32_t i = 0; i < image->section_count; i++) {
+            const struct imageSection* section = &image->sections[i];
+            if (address >= section->address && address - section->address < section->virtual_size) {
+                found = section;
+                break;
+            }
+        }
+        CHECK(found != NULL, EXIT_OOB, "address 0x%08" PRIx32 " is not inside any image section", address);
+
+        uint32_t section_offset = address - found->address;
+        uint32_t count = __min(size, found->virtual_size - section_offset);
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t offset = section_offset + i;
+            out[i] = (offset < found->raw_size) ? image->file_data[found->raw_offset + offset] : 0;
+        }
+
+        address += count;
+        size -= count;
+        out += count;
+    }
+}
+
 void do_module(
     const struct mainState* state,
     const struct module* module) {
@@ -440,16 +593,18 @@ void do_module(
         const char* section_name = NULL;
         for (uint32_t j = project->split_count; j > 0; j--) {
             const struct split* split = &project->splits[j - 1];
-            if (contrib->file_offset >= split->file_offset) {
+            if (contrib->address >= split->address) {
                 section_name = split->name;
                 break;
             }
         }
+        CHECK(section_name != NULL, EXIT_OOB, "contrib at 0x%08" PRIx32 " has no split", contrib->address);
 
         // read in data
 
-        uint8_t* raw_data = malloc(contrib->size);
-        memcpy(raw_data, &state->input_file_data[contrib->file_offset], contrib->size);
+        uint8_t* raw_data = malloc(__max(contrib->size, 1));
+        CHECK(raw_data != NULL, EXIT_MALLOC_FAILED, "out of memory");
+        image_read(state->image, contrib->address, contrib->size, raw_data);
 
         // create section
 
@@ -465,21 +620,25 @@ void do_module(
         uint32_t reloc_count = 0;
         for (uint32_t j = 0; j < project->reloc_count; j++) {
             const struct reloc* reloc = &project->relocs[j];
-            if (reloc->source_file_offset >= contrib->file_offset &&
-                reloc->source_file_offset < contrib->file_offset + contrib->size) {
+            if (reloc->source_address >= contrib->address &&
+                reloc->source_address - contrib->address < contrib->size) {
                 // find the target symbol
 
-                uint32_t target_symbol_index = 0;
+                uint32_t target_symbol_index = UINT32_MAX;
                 uint32_t target_symbol_offset = 0;
                 for (uint32_t k = project->symbol_count; k > 0; k--) {
                     uint32_t symbol_index = k - 1;
                     const struct symbol* symbol = &project->symbols[symbol_index];
-                    if (reloc->target_file_offset >= symbol->file_offset) {
+                    if (reloc->target_address >= symbol->address) {
                         target_symbol_index = symbol_index;
-                        target_symbol_offset = reloc->target_file_offset - symbol->file_offset;
+                        target_symbol_offset = reloc->target_address - symbol->address;
                         break;
                     }
                 }
+
+                CHECK(target_symbol_index != UINT32_MAX, EXIT_OOB,
+                    "reloc at 0x%08" PRIx32 " targets 0x%08" PRIx32 " below every symbol",
+                    reloc->source_address, reloc->target_address);
 
                 // register reloc in list
 
@@ -487,7 +646,9 @@ void do_module(
                 struct COFFRelocState* section_reloc = &section->relocs[section_reloc_index];
                 section_reloc->symbol_index = target_symbol_index;
 
-                uint32_t reloc_offset = reloc->source_file_offset - contrib->file_offset;
+                uint32_t reloc_offset = reloc->source_address - contrib->address;
+                CHECK(contrib->size - reloc_offset >= 4, EXIT_OOB,
+                    "reloc at 0x%08" PRIx32 " crosses end of contrib", reloc->source_address);
                 section_reloc->reloc.virtual_address = reloc_offset;
 
                 // set pointer in section contents
@@ -533,9 +694,9 @@ void do_module(
 
         for (uint32_t j = 0; j < project->symbol_count; j++) {
             const struct symbol* symbol = &project->symbols[j];
-            if (symbol->file_offset >= contrib->file_offset &&
-                symbol->file_offset < contrib->file_offset + contrib->size) {
-                uint32_t symbol_offset = symbol->file_offset - contrib->file_offset;
+            if (symbol->address >= contrib->address &&
+                symbol->address - contrib->address < contrib->size) {
+                uint32_t symbol_offset = symbol->address - contrib->address;
 
                 uint32_t coff_symbol_index = coff_add_symbol(coff);
                 union COFFSymbol* coff_symbol = &coff->symbols[coff_symbol_index];
@@ -670,6 +831,32 @@ uint8_t* read_file(
     return file;
 }
 
+uint32_t parse_address(
+    const cJSON* json,
+    const char* key,
+    const char* kind,
+    uint32_t index) {
+    cJSON* json_address = cJSON_GetObjectItemCaseSensitive(json, key);
+    CHECK(cJSON_IsNumber(json_address) && json_address->valuedouble >= 0 && json_address->valuedouble <= UINT32_MAX,
+        EXIT_INVALID_JSON, "%s #%" PRIu32 ": invalid %s", kind, index, key);
+    return (uint32_t)json_address->valuedouble;
+}
+
+void check_sorted(
+    const void* entries,
+    uint32_t count,
+    size_t stride,
+    size_t address_offset,
+    const char* kind) {
+    for (uint32_t i = 1; i < count; i++) {
+        uint32_t previous, current;
+        memcpy(&previous, (const uint8_t*)entries + (i - 1) * stride + address_offset, sizeof(previous));
+        memcpy(&current, (const uint8_t*)entries + i * stride + address_offset, sizeof(current));
+        CHECK(previous <= current, EXIT_INVALID_JSON, "%s #%" PRIu32 " at 0x%08" PRIx32 " is not sorted by address",
+            kind, i + 1, current);
+    }
+}
+
 void project_parse_splits(
     struct projectState* state,
     const cJSON* json) {
@@ -688,13 +875,11 @@ void project_parse_splits(
         CHECK(split_index < split_count, EXIT_INVALID_JSON, "splits exceeded allocated count");
         struct split* split = &splits[split_index++];
 
-        cJSON* json_file_offset = cJSON_GetObjectItemCaseSensitive(split_json, "file_offset");
-        CHECK(cJSON_IsNumber(json_file_offset), EXIT_FAILURE, "split #%" PRIu32 ": invalid file_offset", split_index);
+        split->address = parse_address(split_json, "address", "split", split_index);
 
         cJSON* json_name = cJSON_GetObjectItemCaseSensitive(split_json, "name");
         CHECK(cJSON_IsString(json_name), EXIT_FAILURE, "split #%" PRIu32 ": invalid name", split_index);
 
-        split->file_offset = (uint32_t)json_file_offset->valueint;
         strncpy(split->name, json_name->valuestring, COUNTOF(split->name) - 1);
         split->name[COUNTOF(split->name) - 1] = '\0';
     }
@@ -774,8 +959,7 @@ void project_parse_symbols(
         CHECK(symbol_index < symbol_count, EXIT_INVALID_JSON, "symbols exceeded allocated count");
         struct symbol* symbol = &symbols[symbol_index++];
 
-        cJSON* json_file_offset = cJSON_GetObjectItemCaseSensitive(symbol_json, "file_offset");
-        CHECK(cJSON_IsNumber(json_file_offset), EXIT_FAILURE, "symbol #%" PRIu32 ": invalid file_offset", symbol_index);
+        symbol->address = parse_address(symbol_json, "address", "symbol", symbol_index);
 
         cJSON* json_flags = cJSON_GetObjectItemCaseSensitive(symbol_json, "flags");
         CHECK(cJSON_IsNumber(json_flags), EXIT_FAILURE, "symbol #%" PRIu32 ": invalid flags", symbol_index);
@@ -790,7 +974,6 @@ void project_parse_symbols(
             local = (bool)json_static->valueint;
         }
 
-        symbol->file_offset = (uint32_t)json_file_offset->valueint;
         symbol->flags = (uint32_t)json_flags->valuedouble;
         symbol->storage_class = local ? 3 : 2;
         cJSON* json_storage_class = cJSON_GetObjectItemCaseSensitive(symbol_json, "storage_class");
@@ -820,8 +1003,7 @@ void project_parse_contribs(
         CHECK(contrib_index < contrib_count, EXIT_INVALID_JSON, "contribs exceeded allocated count");
         struct contrib* contrib = &contribs[contrib_index++];
 
-        cJSON* json_file_offset = cJSON_GetObjectItemCaseSensitive(contrib_json, "file_offset");
-        CHECK(cJSON_IsNumber(json_file_offset), EXIT_FAILURE, "contrib #%" PRIu32 ": invalid file_offset", contrib_index);
+        contrib->address = parse_address(contrib_json, "address", "contrib", contrib_index);
 
         cJSON* json_size = cJSON_GetObjectItemCaseSensitive(contrib_json, "size");
         CHECK(cJSON_IsNumber(json_size), EXIT_FAILURE, "contrib #%" PRIu32 ": invalid size", contrib_index);
@@ -835,7 +1017,6 @@ void project_parse_contribs(
         cJSON* json_selection = cJSON_GetObjectItemCaseSensitive(contrib_json, "selection");
         CHECK(cJSON_IsNumber(json_selection), EXIT_FAILURE, "module #%" PRIu32 ": invalid selection", contrib_index);
 
-        contrib->file_offset = (uint32_t)json_file_offset->valueint;
         contrib->size = (uint32_t)json_size->valueint;
         contrib->flags = (uint32_t)json_flags->valuedouble;
         contrib->module_index = (uint32_t)json_module_index->valueint;
@@ -861,11 +1042,8 @@ void project_parse_relocs(
         CHECK(reloc_index < reloc_count, EXIT_INVALID_JSON, "relocs exceeded allocated count");
         struct reloc* reloc = &relocs[reloc_index++];
 
-        cJSON* json_source_file_offset = cJSON_GetObjectItemCaseSensitive(reloc_json, "source_file_offset");
-        CHECK(cJSON_IsNumber(json_source_file_offset), EXIT_FAILURE, "reloc #%" PRIu32 ": invalid source_file_offset", reloc_index);
-
-        cJSON* json_target_file_offset = cJSON_GetObjectItemCaseSensitive(reloc_json, "target_file_offset");
-        CHECK(cJSON_IsNumber(json_target_file_offset), EXIT_FAILURE, "reloc #%" PRIu32 ": invalid target_file_offset", reloc_index);
+        reloc->source_address = parse_address(reloc_json, "source_address", "reloc", reloc_index);
+        reloc->target_address = parse_address(reloc_json, "target_address", "reloc", reloc_index);
 
         cJSON* json_target_addend = cJSON_GetObjectItemCaseSensitive(reloc_json, "target_addend");
         CHECK(cJSON_IsNumber(json_target_addend), EXIT_FAILURE, "reloc #%" PRIu32 ": invalid target_addend", reloc_index);
@@ -873,15 +1051,14 @@ void project_parse_relocs(
         cJSON* json_is_relative = cJSON_GetObjectItemCaseSensitive(reloc_json, "is_relative");
         CHECK(cJSON_IsBool(json_is_relative), EXIT_FAILURE, "reloc #%" PRIu32 ": invalid is_relative", reloc_index);
 
-        reloc->source_file_offset = (uint32_t)json_source_file_offset->valueint;
-        reloc->target_file_offset = (uint32_t)json_target_file_offset->valueint;
         reloc->target_addend = (int32_t)json_target_addend->valueint;
         reloc->is_relative = (bool)json_is_relative->valueint;
     }
 }
 
 struct projectState* project_new_from_dir(
-    const char* project_dir_path) {
+    const char* project_dir_path,
+    const char* config_file_path) {
     struct projectState* state = malloc(sizeof(*state));
     CHECK(state != NULL, EXIT_MALLOC_FAILED, "out of memory");
 
@@ -900,9 +1077,13 @@ struct projectState* project_new_from_dir(
         const struct projectJsonHandler* handler = &project_json_documents[i];
 
         char json_file_path[_MAX_PATH] = { 0 };
-        snprintf(json_file_path, COUNTOF(json_file_path), "%s/%s.json",
-            project_dir_path,
-            handler->document_name);
+        if (config_file_path != NULL && !strcmp(handler->document_name, "config")) {
+            snprintf(json_file_path, COUNTOF(json_file_path), "%s", config_file_path);
+        } else {
+            snprintf(json_file_path, COUNTOF(json_file_path), "%s/%s.json",
+                project_dir_path,
+                handler->document_name);
+        }
 
         uint32_t file_size = 0;
         uint8_t* json_data = read_file(json_file_path, &file_size);
@@ -914,6 +1095,11 @@ struct projectState* project_new_from_dir(
 
         cJSON_Delete(json);
     }
+
+    check_sorted(state->splits, state->split_count, sizeof(state->splits[0]),
+        offsetof(struct split, address), "split");
+    check_sorted(state->symbols, state->symbol_count, sizeof(state->symbols[0]),
+        offsetof(struct symbol, address), "symbol");
 
     return state;
 }
@@ -932,6 +1118,7 @@ int main(
     int argc,
     char* argv[]) {
     const char* project_dir_path = NULL;
+    const char* config_file_path = NULL;
     const char* input_file_path = NULL;
     const char* output_dir_path = NULL;
 
@@ -947,6 +1134,9 @@ int main(
             input_file_path = (++i < argc) ? argv[i] : NULL;
         } else if (!strcmp(arg, "-p")) {
             project_dir_path = (++i < argc) ? argv[i] : NULL;
+        } else if (!strcmp(arg, "-c")) {
+            config_file_path = (++i < argc) ? argv[i] : NULL;
+            CHECK(config_file_path != NULL, EXIT_USAGE, "-c requires a config file");
         } else if (!strcmp(arg, "-o")) {
             output_dir_path = (++i < argc) ? argv[i] : NULL;
         } else if (!strcmp(arg, "-v")) {
@@ -960,12 +1150,12 @@ int main(
 
     CHECK(project_dir_path && input_file_path && output_dir_path,
         EXIT_USAGE,
-        "usage: %s -i <input file> -p <project dir> -o <output dir> <objects to dump>\n",
+        "usage: %s -i <input PE or XBE> -p <project dir> [-c <config file>] -o <output dir> <objects to dump>\n",
         argv[0]);
 
     // load project
 
-    struct projectState* project = project_new_from_dir(project_dir_path);
+    struct projectState* project = project_new_from_dir(project_dir_path, config_file_path);
 
     // parse module arguments
 
@@ -992,13 +1182,18 @@ int main(
 
     // load input file
 
-    uint8_t* input_file_data = read_file(input_file_path, NULL);
+    uint32_t input_file_size = 0;
+    uint8_t* input_file_data = read_file(input_file_path, &input_file_size);
+
+    struct imageState* image = malloc(sizeof(*image));
+    CHECK(image != NULL, EXIT_MALLOC_FAILED, "out of memory");
+    image_load(image, input_file_data, input_file_size);
 
     // dump requested objects
 
     struct mainState state = { 0 };
     state.project = project;
-    state.input_file_data = input_file_data;
+    state.image = image;
     state.output_dir_path = output_dir_path;
     state.verbose = verbose;
 
@@ -1014,6 +1209,8 @@ int main(
     }
 
     free(module_indices);
+    free(image);
+    free(input_file_data);
 
     // unload project
 

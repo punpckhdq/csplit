@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,7 +38,7 @@
 #define STRINGIFY2(x) #x
 
 struct contrib {
-    uint32_t file_offset;
+    uint32_t address;
     uint32_t size;
     uint32_t flags;
     uint32_t module_index;
@@ -50,19 +51,19 @@ struct module {
 };
 
 struct reloc {
-    uint32_t source_file_offset;
-    uint32_t target_file_offset;
+    uint32_t source_address;
+    uint32_t target_address;
     int32_t target_addend;
     bool is_relative;
 };
 
 struct split {
-    uint32_t file_offset;
+    uint32_t address;
     char name[1024];
 };
 
 struct symbol {
-    uint32_t file_offset;
+    uint32_t address;
     uint32_t flags;
     uint8_t storage_class;
     char name[1024];
